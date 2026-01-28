@@ -14,23 +14,32 @@ MCP server + embedded terminal that lets Claude Code see and edit your ComfyUI w
 ## Requirements
 
 - ComfyUI
-- Claude Code CLI installed (`claude` command in PATH)
 - Python 3.8+
 
 ## Installation
 
-### Option 1: Git Clone (Recommended)
+### Option 1: ComfyUI Manager (Recommended)
+
+1. Open ComfyUI
+2. Click **Manager** → **Install Custom Nodes**
+3. Search for "Comfy Pilot"
+4. Click **Install**
+5. Restart ComfyUI
+
+### Option 2: Registry CLI
+
+```bash
+comfy node install comfy-pilot
+```
+
+### Option 3: Git Clone
 
 ```bash
 cd /path/to/ComfyUI/custom_nodes
-git clone https://github.com/anthropics/comfy-pilot.git
+git clone https://github.com/ConstantineB6/comfy-pilot.git
 ```
 
-### Option 2: Symlink (for Development)
-
-```bash
-ln -s /path/to/comfy-pilot /path/to/ComfyUI/custom_nodes/comfy-pilot
-```
+Claude Code CLI will be installed automatically if not found.
 
 ## Usage
 
