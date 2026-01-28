@@ -70,6 +70,7 @@ The MCP server provides these tools to Claude Code:
 | `install_custom_node` | Install a custom node from the registry |
 | `uninstall_custom_node` | Uninstall a custom node |
 | `update_custom_node` | Update a custom node to latest version |
+| `download_model` | Download models from Hugging Face, CivitAI, or direct URLs |
 
 ### Example: Creating Nodes
 
@@ -89,6 +90,17 @@ Look at the preview image and describe what you see
 ```
 
 Claude will use `view_image` to fetch and analyze the image output.
+
+### Example: Downloading Models
+
+```
+Download the FLUX.1 schnell model for me
+```
+
+Claude will use `download_model` to download from Hugging Face to your ComfyUI models folder. Supports:
+- Hugging Face (including gated models with token auth)
+- CivitAI
+- Direct download URLs
 
 ## Terminal Controls
 

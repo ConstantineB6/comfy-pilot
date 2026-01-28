@@ -1413,6 +1413,413 @@ def update_custom_node(node_id: str) -> dict:
     }
 
 
+# ============== MODEL DOWNLOAD ==============
+
+# Model type to ComfyUI folder mapping
+MODEL_TYPE_FOLDERS = {
+    "checkpoint": "checkpoints",
+    "checkpoints": "checkpoints",
+    "lora": "loras",
+    "loras": "loras",
+    "vae": "vae",
+    "controlnet": "controlnet",
+    "clip": "clip",
+    "clip_vision": "clip_vision",
+    "unet": "unet",
+    "diffusion_model": "diffusion_models",
+    "diffusion_models": "diffusion_models",
+    "text_encoder": "text_encoders",
+    "text_encoders": "text_encoders",
+    "upscale_model": "upscale_models",
+    "upscale_models": "upscale_models",
+    "embeddings": "embeddings",
+    "embedding": "embeddings",
+    "hypernetwork": "hypernetworks",
+    "hypernetworks": "hypernetworks",
+    "style_model": "style_models",
+    "style_models": "style_models",
+    "ipadapter": "ipadapter",
+    "instantid": "instantid",
+    "insightface": "insightface",
+    "pulid": "pulid",
+    "reactor": "reactor",
+    "animatediff": "animatediff_models",
+}
+
+
+def get_comfyui_models_dir() -> str:
+    """Get the ComfyUI models directory."""
+    import os
+
+    # Try to get from ComfyUI's folder_paths if available
+    try:
+        # Query ComfyUI for its base path
+        result = make_request("/system_stats")
+        if "error" not in result:
+            # ComfyUI is running, try to find models folder
+            pass
+    except Exception:
+        pass
+
+    # Common locations
+    possible_paths = [
+        # From the plugin directory (go up to ComfyUI root)
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "models"),
+        # Standard ComfyUI locations
+        os.path.expanduser("~/ComfyUI/models"),
+        os.path.expanduser("~/comfyui/models"),
+        "/opt/ComfyUI/models",
+        "/workspace/ComfyUI/models",
+        # ComfyUI Desktop (macOS)
+        os.path.expanduser("~/Documents/comfy/ComfyUI/models"),
+        os.path.expanduser("~/ComfyUI-Desktop/ComfyUI/models"),
+    ]
+
+    for path in possible_paths:
+        if os.path.isdir(path):
+            return os.path.abspath(path)
+
+    return None
+
+
+def parse_hf_url(url: str) -> dict:
+    """Parse a Hugging Face URL to extract repo and file info.
+
+    Supports:
+    - https://huggingface.co/user/repo/blob/main/file.safetensors
+    - https://huggingface.co/user/repo/resolve/main/file.safetensors
+    - user/repo (assumes root of repo)
+    - user/repo/file.safetensors
+    """
+    import re
+
+    # Full URL format
+    hf_pattern = r"https?://huggingface\.co/([^/]+)/([^/]+)(?:/(?:blob|resolve)/([^/]+)/(.+))?"
+    match = re.match(hf_pattern, url)
+    if match:
+        user, repo, branch, filepath = match.groups()
+        return {
+            "type": "huggingface",
+            "repo": f"{user}/{repo}",
+            "branch": branch or "main",
+            "filepath": filepath,
+        }
+
+    # Short format: user/repo or user/repo/file.safetensors
+    if "/" in url and not url.startswith("http"):
+        parts = url.split("/")
+        if len(parts) >= 2:
+            repo = f"{parts[0]}/{parts[1]}"
+            filepath = "/".join(parts[2:]) if len(parts) > 2 else None
+            return {
+                "type": "huggingface",
+                "repo": repo,
+                "branch": "main",
+                "filepath": filepath,
+            }
+
+    return None
+
+
+def parse_civitai_url(url: str) -> dict:
+    """Parse a CivitAI URL to extract model info.
+
+    Supports:
+    - https://civitai.com/models/123456
+    - https://civitai.com/models/123456/model-name
+    - https://civitai.com/api/download/models/789
+    """
+    import re
+
+    # API download URL
+    api_pattern = r"https?://civitai\.com/api/download/models/(\d+)"
+    match = re.match(api_pattern, url)
+    if match:
+        return {
+            "type": "civitai",
+            "model_version_id": match.group(1),
+            "download_url": url,
+        }
+
+    # Model page URL
+    model_pattern = r"https?://civitai\.com/models/(\d+)"
+    match = re.match(model_pattern, url)
+    if match:
+        return {
+            "type": "civitai",
+            "model_id": match.group(1),
+        }
+
+    return None
+
+
+def download_model(url: str, model_type: str, filename: str = None, hf_token: str = None, subfolder: str = None) -> dict:
+    """Download a model to the appropriate ComfyUI folder.
+
+    Args:
+        url: Model URL (Hugging Face, CivitAI, or direct download URL)
+        model_type: Type of model - determines destination folder
+                   (checkpoint, lora, vae, controlnet, clip, unet, embeddings, etc.)
+        filename: Optional filename override. Auto-detected from URL if not provided.
+        hf_token: Hugging Face token for gated models. Only needed if download fails with auth error.
+        subfolder: Optional subfolder within the model type directory
+
+    Returns:
+        Download status with file path, or error with instructions for gated models.
+    """
+    import subprocess
+    import os
+    import shutil
+    import re
+
+    # Validate model_type
+    folder_name = MODEL_TYPE_FOLDERS.get(model_type.lower())
+    if not folder_name:
+        return {
+            "error": f"Unknown model_type: {model_type}",
+            "valid_types": list(set(MODEL_TYPE_FOLDERS.values()))
+        }
+
+    # Get ComfyUI models directory
+    models_dir = get_comfyui_models_dir()
+    if not models_dir:
+        return {"error": "Could not find ComfyUI models directory. Is ComfyUI installed?"}
+
+    # Build destination path
+    dest_dir = os.path.join(models_dir, folder_name)
+    if subfolder:
+        dest_dir = os.path.join(dest_dir, subfolder)
+
+    # Create directory if needed
+    os.makedirs(dest_dir, exist_ok=True)
+
+    # Parse URL to determine download method
+    hf_info = parse_hf_url(url)
+    civitai_info = parse_civitai_url(url)
+
+    if hf_info:
+        return _download_from_huggingface(hf_info, dest_dir, filename, hf_token)
+    elif civitai_info:
+        return _download_from_civitai(civitai_info, dest_dir, filename)
+    elif url.startswith("http://") or url.startswith("https://"):
+        return _download_direct(url, dest_dir, filename)
+    else:
+        # Assume it's a HF repo shorthand
+        hf_info = parse_hf_url(url)
+        if hf_info:
+            return _download_from_huggingface(hf_info, dest_dir, filename, hf_token)
+        return {"error": f"Could not parse URL: {url}"}
+
+
+def _download_from_huggingface(hf_info: dict, dest_dir: str, filename: str = None, hf_token: str = None) -> dict:
+    """Download a model from Hugging Face."""
+    import subprocess
+    import shutil
+    import os
+
+    repo = hf_info["repo"]
+    filepath = hf_info.get("filepath")
+
+    # Check if huggingface-cli is available
+    hf_cli = shutil.which("huggingface-cli")
+    if not hf_cli:
+        # Try common locations
+        common_paths = [
+            os.path.expanduser("~/.local/bin/huggingface-cli"),
+            "/usr/local/bin/huggingface-cli",
+            "/opt/homebrew/bin/huggingface-cli",
+        ]
+        for path in common_paths:
+            if os.path.isfile(path) and os.access(path, os.X_OK):
+                hf_cli = path
+                break
+
+    if not hf_cli:
+        return {
+            "error": "huggingface-cli not found",
+            "instructions": "Install with: pip install huggingface_hub[cli]"
+        }
+
+    # Build command
+    cmd = [hf_cli, "download", repo]
+
+    if filepath:
+        cmd.append(filepath)
+
+    cmd.extend(["--local-dir", dest_dir])
+
+    # Add token if provided
+    if hf_token:
+        cmd.extend(["--token", hf_token])
+
+    # Run download
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=600  # 10 minute timeout
+        )
+
+        if result.returncode == 0:
+            # Determine the downloaded file path
+            if filepath:
+                downloaded_file = os.path.join(dest_dir, os.path.basename(filepath))
+            else:
+                downloaded_file = dest_dir
+
+            return {
+                "status": "success",
+                "repo": repo,
+                "filepath": filepath,
+                "destination": downloaded_file,
+                "message": f"Downloaded to {downloaded_file}"
+            }
+        else:
+            stderr = result.stderr.lower()
+            # Check for auth errors
+            if "401" in stderr or "403" in stderr or "gated" in stderr or "access" in stderr:
+                return {
+                    "error": "gated_model",
+                    "repo": repo,
+                    "message": "This model requires authentication. Please provide your Hugging Face token.",
+                    "instructions": "Get your token from https://huggingface.co/settings/tokens (read access is sufficient). Then call this tool again with hf_token parameter.",
+                    "accept_url": f"https://huggingface.co/{repo}"
+                }
+            return {
+                "error": "download_failed",
+                "message": result.stderr or result.stdout or "Unknown error"
+            }
+
+    except subprocess.TimeoutExpired:
+        return {"error": "Download timed out after 10 minutes"}
+    except Exception as e:
+        return {"error": f"Download failed: {str(e)}"}
+
+
+def _download_from_civitai(civitai_info: dict, dest_dir: str, filename: str = None) -> dict:
+    """Download a model from CivitAI."""
+    import subprocess
+    import os
+
+    # If we have a direct download URL
+    if civitai_info.get("download_url"):
+        download_url = civitai_info["download_url"]
+    elif civitai_info.get("model_version_id"):
+        download_url = f"https://civitai.com/api/download/models/{civitai_info['model_version_id']}"
+    elif civitai_info.get("model_id"):
+        # Need to fetch the model info to get download URL
+        return {
+            "error": "civitai_model_page",
+            "model_id": civitai_info["model_id"],
+            "message": "This is a CivitAI model page URL. Please provide the direct download URL.",
+            "instructions": f"Go to https://civitai.com/models/{civitai_info['model_id']}, click Download, and copy the direct download URL."
+        }
+    else:
+        return {"error": "Could not parse CivitAI URL"}
+
+    return _download_direct(download_url, dest_dir, filename, source="civitai")
+
+
+def _download_direct(url: str, dest_dir: str, filename: str = None, source: str = "direct") -> dict:
+    """Download a file directly via wget or curl."""
+    import subprocess
+    import shutil
+    import os
+    import re
+
+    # Determine filename
+    if not filename:
+        # Try to extract from URL
+        url_path = url.split("?")[0]  # Remove query params
+        filename = os.path.basename(url_path)
+        if not filename or "." not in filename:
+            filename = "downloaded_model.safetensors"
+
+    dest_path = os.path.join(dest_dir, filename)
+
+    # Check if already exists
+    if os.path.exists(dest_path):
+        return {
+            "status": "exists",
+            "destination": dest_path,
+            "message": f"File already exists at {dest_path}"
+        }
+
+    # Try wget first, then curl
+    wget = shutil.which("wget")
+    curl = shutil.which("curl")
+
+    if wget:
+        cmd = [wget, "-O", dest_path, "--progress=bar:force", url]
+    elif curl:
+        cmd = [curl, "-L", "-o", dest_path, "--progress-bar", url]
+    else:
+        # Fallback to Python urllib
+        return _download_with_urllib(url, dest_path)
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=1800  # 30 minute timeout for large files
+        )
+
+        if result.returncode == 0 and os.path.exists(dest_path):
+            file_size = os.path.getsize(dest_path)
+            return {
+                "status": "success",
+                "source": source,
+                "destination": dest_path,
+                "size_mb": round(file_size / (1024 * 1024), 2),
+                "message": f"Downloaded to {dest_path}"
+            }
+        else:
+            # Clean up partial file
+            if os.path.exists(dest_path):
+                os.remove(dest_path)
+            return {
+                "error": "download_failed",
+                "message": result.stderr or result.stdout or "Unknown error"
+            }
+
+    except subprocess.TimeoutExpired:
+        if os.path.exists(dest_path):
+            os.remove(dest_path)
+        return {"error": "Download timed out after 30 minutes"}
+    except Exception as e:
+        return {"error": f"Download failed: {str(e)}"}
+
+
+def _download_with_urllib(url: str, dest_path: str) -> dict:
+    """Fallback download using urllib."""
+    import os
+
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "ComfyUI-Model-Downloader"})
+        with urllib.request.urlopen(req, timeout=1800) as response:
+            with open(dest_path, "wb") as f:
+                while True:
+                    chunk = response.read(8192)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+
+        file_size = os.path.getsize(dest_path)
+        return {
+            "status": "success",
+            "destination": dest_path,
+            "size_mb": round(file_size / (1024 * 1024), 2),
+            "message": f"Downloaded to {dest_path}"
+        }
+
+    except urllib.error.HTTPError as e:
+        return {"error": f"HTTP error: {e.code} {e.reason}"}
+    except Exception as e:
+        return {"error": f"Download failed: {str(e)}"}
+
+
 # MCP Protocol Implementation
 def send_response(response: dict):
     """Send a JSON-RPC response."""
@@ -1652,6 +2059,37 @@ def handle_request(request: dict) -> dict:
                             },
                             "required": ["node_id"]
                         }
+                    },
+                    {
+                        "name": "download_model",
+                        "description": "Download a model to the ComfyUI models folder. Supports Hugging Face, CivitAI, and direct URLs. For gated HF models, will return instructions to provide a token.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "url": {
+                                    "type": "string",
+                                    "description": "Model URL: HF (https://huggingface.co/user/repo/...), CivitAI (https://civitai.com/...), direct URL, or HF shorthand (user/repo/file.safetensors)"
+                                },
+                                "model_type": {
+                                    "type": "string",
+                                    "enum": ["checkpoint", "lora", "vae", "controlnet", "clip", "clip_vision", "unet", "diffusion_models", "text_encoders", "upscale_models", "embeddings", "hypernetworks", "ipadapter", "instantid", "insightface", "pulid", "animatediff"],
+                                    "description": "Model type - determines destination folder in ComfyUI/models/"
+                                },
+                                "filename": {
+                                    "type": "string",
+                                    "description": "Optional: Override the filename. Auto-detected from URL if not provided."
+                                },
+                                "hf_token": {
+                                    "type": "string",
+                                    "description": "Hugging Face token for gated models. Only provide if download fails with auth error."
+                                },
+                                "subfolder": {
+                                    "type": "string",
+                                    "description": "Optional: Subfolder within the model type directory"
+                                }
+                            },
+                            "required": ["url", "model_type"]
+                        }
                     }
                 ]
             }
@@ -1733,6 +2171,16 @@ def handle_request(request: dict) -> dict:
                 result = uninstall_custom_node(tool_args.get("node_id", ""))
             elif tool_name == "update_custom_node":
                 result = update_custom_node(tool_args.get("node_id", ""))
+
+            # Model download
+            elif tool_name == "download_model":
+                result = download_model(
+                    url=tool_args.get("url", ""),
+                    model_type=tool_args.get("model_type", ""),
+                    filename=tool_args.get("filename"),
+                    hf_token=tool_args.get("hf_token"),
+                    subfolder=tool_args.get("subfolder")
+                )
 
             else:
                 return {
