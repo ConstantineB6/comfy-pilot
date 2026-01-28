@@ -317,17 +317,22 @@ def clear_history() -> dict:
 
 # ============== CONSOLIDATED TOOLS ==============
 
-def get_status(include: list = None, detail: str = "summary") -> dict:
+def get_status(include: list = None, detail: str = "summary", history_limit: int = 5, history_offset: int = 0) -> dict:
     """Get status information from ComfyUI.
 
     Args:
         include: List of what to include: "queue", "system", "history".
                  Default is ["queue", "system"].
         detail: Level of detail - "summary" (default) or "full".
-                Summary returns counts and IDs only. Full returns raw API data.
+                Summary returns counts and IDs only. Full returns more detail but still paginated.
+        history_limit: Max number of history entries to return (default 5, max 20).
+        history_offset: Skip this many entries from the most recent (for pagination).
     """
     if include is None:
         include = ["queue", "system"]
+
+    # Clamp history_limit
+    history_limit = max(1, min(history_limit, 20))
 
     result = {}
 
@@ -355,28 +360,100 @@ def get_status(include: list = None, detail: str = "summary") -> dict:
         raw_history = make_request("/history")
         if "error" in raw_history:
             result["history"] = raw_history
-        elif detail == "full":
-            result["history"] = raw_history
         else:
-            # Summarize history - list of prompt IDs with status and output node IDs
-            history_summary = []
+            # Sort by timestamp (most recent first) - history is a dict keyed by prompt_id
+            history_items = []
             for prompt_id, data in raw_history.items():
                 if not isinstance(data, dict):
                     continue
-                outputs = data.get("outputs", {})
+                # Get timestamp from status for sorting
                 status = data.get("status", {})
-                history_summary.append({
-                    "prompt_id": prompt_id,
-                    "status": status.get("status_str", "unknown"),
-                    "completed": status.get("completed", False),
-                    "output_nodes": list(outputs.keys()) if outputs else []
-                })
-            result["history"] = {
-                "total": len(history_summary),
-                "prompts": history_summary[-10:]  # Last 10 only
-            }
+                timestamp = status.get("messages", [[0, {}]])[0][0] if status.get("messages") else 0
+                history_items.append((prompt_id, data, timestamp))
+
+            # Sort by timestamp descending (most recent first)
+            history_items.sort(key=lambda x: x[2], reverse=True)
+
+            # Apply offset and limit
+            total_count = len(history_items)
+            history_items = history_items[history_offset:history_offset + history_limit]
+
+            if detail == "full":
+                # Full detail but still paginated - include outputs but summarize large data
+                history_entries = []
+                for prompt_id, data, _ in history_items:
+                    outputs = data.get("outputs", {})
+                    status = data.get("status", {})
+
+                    # Summarize outputs - just node IDs and output types, not full data
+                    output_summary = {}
+                    for node_id, node_outputs in outputs.items():
+                        if isinstance(node_outputs, dict):
+                            output_summary[node_id] = {
+                                key: f"[{len(val)} items]" if isinstance(val, list) else type(val).__name__
+                                for key, val in node_outputs.items()
+                            }
+
+                    history_entries.append({
+                        "prompt_id": prompt_id,
+                        "status": status.get("status_str", "unknown"),
+                        "completed": status.get("completed", False),
+                        "outputs": output_summary,
+                        "execution_time": _get_execution_time(status),
+                    })
+
+                result["history"] = {
+                    "total": total_count,
+                    "offset": history_offset,
+                    "limit": history_limit,
+                    "entries": history_entries
+                }
+            else:
+                # Summary - just prompt IDs with basic status
+                history_summary = []
+                for prompt_id, data, _ in history_items:
+                    outputs = data.get("outputs", {})
+                    status = data.get("status", {})
+                    history_summary.append({
+                        "prompt_id": prompt_id,
+                        "status": status.get("status_str", "unknown"),
+                        "completed": status.get("completed", False),
+                        "output_nodes": list(outputs.keys()) if outputs else []
+                    })
+
+                result["history"] = {
+                    "total": total_count,
+                    "offset": history_offset,
+                    "limit": history_limit,
+                    "entries": history_summary
+                }
 
     return result
+
+
+def _get_execution_time(status: dict) -> str:
+    """Extract execution time from status messages."""
+    messages = status.get("messages", [])
+    start_time = None
+    end_time = None
+
+    for msg in messages:
+        if len(msg) >= 2:
+            msg_type = msg[0]
+            msg_data = msg[1] if isinstance(msg[1], dict) else {}
+            if msg_type == "execution_start":
+                start_time = msg_data.get("timestamp")
+            elif msg_type == "execution_success" or msg_type == "execution_error":
+                end_time = msg_data.get("timestamp")
+
+    if start_time and end_time:
+        try:
+            duration = float(end_time) - float(start_time)
+            return f"{duration:.2f}s"
+        except (ValueError, TypeError):
+            pass
+
+    return "unknown"
 
 
 def run(action: str = "queue", node_ids = None) -> dict:
@@ -2090,7 +2167,7 @@ def handle_request(request: dict) -> dict:
                     },
                     {
                         "name": "get_status",
-                        "description": "Get ComfyUI status: queue, system stats, and/or history. Returns lightweight summaries by default (counts, IDs). Use detail='full' for raw API data.",
+                        "description": "Get ComfyUI status: queue, system stats, and/or history. Returns lightweight summaries by default (counts, IDs). Use detail='full' for more info. History is always paginated.",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
@@ -2102,7 +2179,15 @@ def handle_request(request: dict) -> dict:
                                 "detail": {
                                     "type": "string",
                                     "enum": ["summary", "full"],
-                                    "description": "\"summary\" (default): counts and IDs only. \"full\": raw API data (can be large)."
+                                    "description": "\"summary\" (default): counts and IDs only. \"full\": includes output summaries and execution times."
+                                },
+                                "history_limit": {
+                                    "type": "integer",
+                                    "description": "Max history entries to return (default 5, max 20). Use with history_offset for pagination."
+                                },
+                                "history_offset": {
+                                    "type": "integer",
+                                    "description": "Skip this many entries from most recent (default 0). Use for pagination."
                                 }
                             },
                             "required": []
@@ -2292,7 +2377,9 @@ def handle_request(request: dict) -> dict:
             elif tool_name == "get_status":
                 result = get_status(
                     include=tool_args.get("include"),
-                    detail=tool_args.get("detail", "summary")
+                    detail=tool_args.get("detail", "summary"),
+                    history_limit=tool_args.get("history_limit", 5),
+                    history_offset=tool_args.get("history_offset", 0)
                 )
             elif tool_name == "run":
                 result = run(
