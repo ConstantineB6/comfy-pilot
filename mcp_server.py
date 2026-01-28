@@ -1189,99 +1189,166 @@ def view_image(node_id: str = None, image_index: int = 0) -> dict:
         return {"error": f"Failed to fetch image: {str(e)}"}
 
 
-# ============== NODE MANAGEMENT (via ComfyUI Manager API) ==============
+# ============== NODE MANAGEMENT (via ComfyUI Registry API + git) ==============
+
+COMFY_REGISTRY_API = "https://api.comfy.org"
+
+
+def get_comfyui_custom_nodes_dir() -> str:
+    """Get the ComfyUI custom_nodes directory."""
+    import os
+
+    # From the plugin directory (we're inside custom_nodes)
+    plugin_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(plugin_dir)
+
+    # Verify parent is actually custom_nodes
+    if os.path.basename(parent_dir) == "custom_nodes":
+        return parent_dir
+
+    # Fallback: common locations
+    possible_paths = [
+        os.path.expanduser("~/ComfyUI/custom_nodes"),
+        os.path.expanduser("~/comfyui/custom_nodes"),
+        "/opt/ComfyUI/custom_nodes",
+        "/workspace/ComfyUI/custom_nodes",
+        os.path.expanduser("~/Documents/ComfyUI/custom_nodes"),
+    ]
+
+    for path in possible_paths:
+        if os.path.isdir(path):
+            return os.path.abspath(path)
+
+    return None
+
+
+def query_registry(endpoint: str, params: dict = None) -> dict:
+    """Query the ComfyUI Registry API."""
+    import urllib.parse
+
+    url = f"{COMFY_REGISTRY_API}{endpoint}"
+    if params:
+        url += "?" + urllib.parse.urlencode(params)
+
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "ComfyPilot/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as response:
+            return json.loads(response.read().decode())
+    except urllib.error.HTTPError as e:
+        return {"error": f"Registry API error: {e.code} {e.reason}"}
+    except Exception as e:
+        return {"error": f"Failed to query registry: {str(e)}"}
+
+
+def get_installed_nodes() -> dict:
+    """Get a map of installed custom nodes by scanning the custom_nodes directory."""
+    import os
+
+    custom_nodes_dir = get_comfyui_custom_nodes_dir()
+    if not custom_nodes_dir:
+        return {}
+
+    installed = {}
+    for name in os.listdir(custom_nodes_dir):
+        path = os.path.join(custom_nodes_dir, name)
+        if os.path.isdir(path) and not name.startswith(".") and not name.startswith("__"):
+            # Check if it's a git repo
+            is_git = os.path.isdir(os.path.join(path, ".git"))
+            installed[name.lower()] = {
+                "name": name,
+                "path": path,
+                "is_git": is_git
+            }
+
+    return installed
+
 
 def search_custom_nodes(query: str = None, status: str = "all", category: str = None, limit: int = 10) -> dict:
-    """Search for custom nodes in the ComfyUI Manager registry.
+    """Search for custom nodes in the ComfyUI Registry.
 
     Args:
-        query: Search term (matches name, description, author). Case-insensitive substring match.
-        status: Filter by status - "all", "installed", "not-installed", "has-update"
-        category: Filter by category (e.g., "animation", "3d", "video")
+        query: Search term (matches name, description, author). Case-insensitive.
+        status: Filter by installation status: "all", "installed", "not-installed"
+        category: Filter by category (not yet supported by registry API)
         limit: Maximum results to return (default 10)
 
     Returns:
         List of matching nodes with basic info.
     """
-    # Get the full node list from ComfyUI Manager
-    node_list = make_request("/customnode/getlist?mode=cache")
-    if "error" in node_list:
-        # Try without cache
-        node_list = make_request("/customnode/getlist")
-    if "error" in node_list:
-        return {"error": f"ComfyUI Manager not available: {node_list.get('error')}. Make sure ComfyUI Manager is installed."}
-
-    # node_list is {"custom_nodes": [...]}
-    nodes = node_list.get("custom_nodes", [])
-    if not nodes:
-        return {"error": "No custom nodes found. ComfyUI Manager may not be properly installed."}
-
     # Get installed nodes for status filtering
-    installed_data = make_request("/customnode/installed?mode=cache")
-    if "error" in installed_data:
-        installed_data = make_request("/customnode/installed")
+    installed_map = get_installed_nodes()
 
-    installed_map = {}
-    if "error" not in installed_data:
-        for node in installed_data.get("custom_nodes", []):
-            node_id = node.get("id") or node.get("title", "").lower().replace(" ", "-")
-            installed_map[node_id] = {
-                "installed": node.get("installed", False),
-                "version": node.get("version"),
-                "has_update": node.get("update_available", False) or node.get("need_update", False)
-            }
+    # If filtering for installed only, just return local info
+    if status == "installed":
+        results = []
+        for node_name, info in installed_map.items():
+            if query and query.lower() not in node_name.lower():
+                continue
+            results.append({
+                "id": node_name,
+                "name": info["name"],
+                "installed": True,
+                "path": info["path"],
+                "is_git": info["is_git"]
+            })
+            if len(results) >= limit:
+                break
 
-    # Filter and search
+        return {
+            "total_matches": len(results),
+            "limit": limit,
+            "query": query,
+            "status_filter": status,
+            "nodes": results
+        }
+
+    # Query the registry API
+    params = {"limit": min(limit * 2, 50)}  # Fetch extra in case we need to filter
+    if query:
+        params["search"] = query
+
+    result = query_registry("/nodes/search", params)
+    if "error" in result:
+        return result
+
+    nodes = result.get("nodes", [])
     results = []
-    query_lower = query.lower() if query else None
 
     for node in nodes:
-        # Extract node info
-        node_id = node.get("id") or node.get("reference", "")
-        title = node.get("title", "")
+        node_id = node.get("id", "")
+        name = node.get("name", node_id)
+        repo = node.get("repository", "")
         description = node.get("description", "")
-        author = node.get("author", "")
-        node_category = node.get("category", "")
+        author = node.get("publisher", {}).get("name", "") if isinstance(node.get("publisher"), dict) else ""
+        stars = node.get("github_stars", 0)
+        downloads = node.get("downloads", 0)
+
+        # Check if installed (match by id or repo folder name)
+        is_installed = False
+        repo_name = repo.rstrip("/").split("/")[-1] if repo else ""
+        if node_id.lower() in installed_map or repo_name.lower() in installed_map:
+            is_installed = True
 
         # Status filter
-        install_info = installed_map.get(node_id, {})
-        is_installed = install_info.get("installed", False) or node.get("installed", False)
-        has_update = install_info.get("has_update", False)
-
-        if status == "installed" and not is_installed:
-            continue
-        elif status == "not-installed" and is_installed:
-            continue
-        elif status == "has-update" and not has_update:
+        if status == "not-installed" and is_installed:
             continue
 
-        # Category filter
-        if category and category.lower() not in node_category.lower():
-            continue
-
-        # Query filter (substring match on title, description, author)
-        if query_lower:
-            searchable = f"{title} {description} {author}".lower()
-            if query_lower not in searchable:
-                continue
-
-        # Build result
         results.append({
             "id": node_id,
-            "title": title,
+            "name": name,
             "author": author,
             "description": description[:150] + "..." if len(description) > 150 else description,
-            "category": node_category,
+            "repository": repo,
             "installed": is_installed,
-            "has_update": has_update,
-            "stars": node.get("stars", 0),
+            "stars": stars,
+            "downloads": downloads
         })
 
         if len(results) >= limit:
             break
 
     return {
-        "total_matches": len(results),
+        "total_matches": result.get("total", len(results)),
         "limit": limit,
         "query": query,
         "status_filter": status,
@@ -1290,127 +1357,234 @@ def search_custom_nodes(query: str = None, status: str = "all", category: str = 
 
 
 def install_custom_node(node_id: str) -> dict:
-    """Install a custom node via ComfyUI Manager.
+    """Install a custom node by cloning from git.
 
     Args:
-        node_id: The node ID or reference to install (e.g., "comfy-pilot", or git URL)
+        node_id: The node ID, name, or git URL to install
 
     Returns:
         Installation status.
     """
-    # Check if it's a git URL
+    import subprocess
+    import shutil
+    import os
+
+    custom_nodes_dir = get_comfyui_custom_nodes_dir()
+    if not custom_nodes_dir:
+        return {"error": "Could not find ComfyUI custom_nodes directory"}
+
+    # Check if git is available
+    git = shutil.which("git")
+    if not git:
+        return {"error": "git is not installed. Please install git to use this feature."}
+
+    # Determine the git URL
     if node_id.startswith("http://") or node_id.startswith("https://"):
-        result = make_request("/customnode/install/git_url", method="POST", data=node_id)
-        if "error" in result:
-            return result
-        return {"status": "queued", "node_id": node_id, "message": "Installation queued from git URL"}
+        git_url = node_id
+        repo_name = git_url.rstrip("/").split("/")[-1].replace(".git", "")
+    else:
+        # Look up in the registry - first try direct lookup
+        result = query_registry(f"/nodes/{node_id}")
+        if "error" in result or not result.get("repository"):
+            # Try search
+            search_result = query_registry("/nodes/search", {"search": node_id, "limit": 5})
+            if "error" in search_result:
+                return search_result
 
-    # Find the node in the registry first
-    node_list = make_request("/customnode/getlist?mode=cache")
-    if "error" in node_list:
-        node_list = make_request("/customnode/getlist")
-    if "error" in node_list:
-        return {"error": f"ComfyUI Manager not available: {node_list.get('error')}"}
+            # Find best match
+            nodes = search_result.get("nodes", [])
+            target = None
+            for node in nodes:
+                if node.get("id", "").lower() == node_id.lower() or node.get("name", "").lower() == node_id.lower():
+                    target = node
+                    break
+            if not target and nodes:
+                target = nodes[0]  # Take first result
 
-    # Find matching node
-    target_node = None
-    for node in node_list.get("custom_nodes", []):
-        nid = node.get("id") or node.get("reference", "")
-        title = node.get("title", "")
-        if node_id.lower() in nid.lower() or node_id.lower() in title.lower():
-            target_node = node
-            break
+            if not target:
+                return {"error": f"Node '{node_id}' not found in registry. Use search_custom_nodes to find available nodes."}
 
-    if not target_node:
-        return {"error": f"Node '{node_id}' not found in registry. Use search_custom_nodes to find available nodes."}
+            result = target
 
-    # Queue installation via Manager API
-    result = make_request("/manager/queue/install", method="POST", data=target_node)
-    if "error" in result:
-        return result
+        git_url = result.get("repository", "")
+        if not git_url:
+            return {"error": f"No repository URL found for '{node_id}'"}
+
+        repo_name = git_url.rstrip("/").split("/")[-1].replace(".git", "")
+
+    # Check if already installed
+    dest_path = os.path.join(custom_nodes_dir, repo_name)
+    if os.path.exists(dest_path):
+        return {
+            "status": "already_installed",
+            "path": dest_path,
+            "message": f"'{repo_name}' is already installed at {dest_path}"
+        }
+
+    # Clone the repository
+    try:
+        subprocess.run(
+            [git, "clone", "--depth", "1", git_url, dest_path],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=300
+        )
+    except subprocess.CalledProcessError as e:
+        return {"error": f"git clone failed: {e.stderr}"}
+    except subprocess.TimeoutExpired:
+        return {"error": "git clone timed out after 5 minutes"}
+
+    # Check for requirements.txt and install dependencies
+    requirements_file = os.path.join(dest_path, "requirements.txt")
+    pip_message = ""
+    if os.path.exists(requirements_file):
+        pip_message = " Note: This node has a requirements.txt - dependencies may need to be installed."
 
     return {
-        "status": "queued",
-        "node_id": target_node.get("id") or target_node.get("reference"),
-        "title": target_node.get("title"),
-        "message": "Installation queued. Restart ComfyUI to complete installation."
+        "status": "installed",
+        "node_id": node_id,
+        "repository": git_url,
+        "path": dest_path,
+        "message": f"Installed to {dest_path}. Restart ComfyUI to load the node.{pip_message}"
     }
 
 
 def uninstall_custom_node(node_id: str) -> dict:
-    """Uninstall a custom node via ComfyUI Manager.
+    """Uninstall a custom node by removing its directory.
 
     Args:
-        node_id: The node ID to uninstall
+        node_id: The node ID or folder name to uninstall
 
     Returns:
         Uninstallation status.
     """
-    # Get installed nodes to find the target
-    installed_data = make_request("/customnode/installed")
-    if "error" in installed_data:
-        return {"error": f"ComfyUI Manager not available: {installed_data.get('error')}"}
+    import shutil
+    import os
 
-    # Find matching installed node
-    target_node = None
-    for node in installed_data.get("custom_nodes", []):
-        nid = node.get("id") or node.get("title", "").lower().replace(" ", "-")
-        title = node.get("title", "")
-        if node_id.lower() in nid.lower() or node_id.lower() in title.lower():
-            target_node = node
-            break
+    custom_nodes_dir = get_comfyui_custom_nodes_dir()
+    if not custom_nodes_dir:
+        return {"error": "Could not find ComfyUI custom_nodes directory"}
 
-    if not target_node:
+    # Find the installed node
+    installed = get_installed_nodes()
+
+    target_path = None
+    target_name = None
+
+    # Try exact match first
+    if node_id.lower() in installed:
+        target_path = installed[node_id.lower()]["path"]
+        target_name = installed[node_id.lower()]["name"]
+    else:
+        # Try partial match
+        for name, info in installed.items():
+            if node_id.lower() in name:
+                target_path = info["path"]
+                target_name = info["name"]
+                break
+
+    if not target_path:
         return {"error": f"Node '{node_id}' is not installed. Use search_custom_nodes(status='installed') to see installed nodes."}
 
-    # Queue uninstallation
-    result = make_request("/manager/queue/uninstall", method="POST", data=target_node)
-    if "error" in result:
-        return result
+    # Confirm the path is inside custom_nodes (safety check)
+    if not os.path.abspath(target_path).startswith(os.path.abspath(custom_nodes_dir)):
+        return {"error": "Security error: target path is outside custom_nodes directory"}
+
+    # Remove the directory
+    try:
+        shutil.rmtree(target_path)
+    except Exception as e:
+        return {"error": f"Failed to remove directory: {str(e)}"}
 
     return {
-        "status": "queued",
-        "node_id": target_node.get("id") or target_node.get("title"),
-        "message": "Uninstallation queued. Restart ComfyUI to complete."
+        "status": "uninstalled",
+        "node_id": target_name,
+        "path": target_path,
+        "message": f"Removed {target_name}. Restart ComfyUI to complete uninstallation."
     }
 
 
 def update_custom_node(node_id: str) -> dict:
-    """Update a custom node via ComfyUI Manager.
+    """Update a custom node by running git pull.
 
     Args:
-        node_id: The node ID to update
+        node_id: The node ID or folder name to update
 
     Returns:
         Update status.
     """
-    # Get installed nodes to find the target
-    installed_data = make_request("/customnode/installed")
-    if "error" in installed_data:
-        return {"error": f"ComfyUI Manager not available: {installed_data.get('error')}"}
+    import subprocess
+    import shutil
+    import os
 
-    # Find matching installed node
-    target_node = None
-    for node in installed_data.get("custom_nodes", []):
-        nid = node.get("id") or node.get("title", "").lower().replace(" ", "-")
-        title = node.get("title", "")
-        if node_id.lower() in nid.lower() or node_id.lower() in title.lower():
-            target_node = node
-            break
+    custom_nodes_dir = get_comfyui_custom_nodes_dir()
+    if not custom_nodes_dir:
+        return {"error": "Could not find ComfyUI custom_nodes directory"}
 
-    if not target_node:
+    # Check if git is available
+    git = shutil.which("git")
+    if not git:
+        return {"error": "git is not installed. Please install git to use this feature."}
+
+    # Find the installed node
+    installed = get_installed_nodes()
+
+    target_path = None
+    target_name = None
+    is_git = False
+
+    # Try exact match first
+    if node_id.lower() in installed:
+        info = installed[node_id.lower()]
+        target_path = info["path"]
+        target_name = info["name"]
+        is_git = info["is_git"]
+    else:
+        # Try partial match
+        for name, info in installed.items():
+            if node_id.lower() in name:
+                target_path = info["path"]
+                target_name = info["name"]
+                is_git = info["is_git"]
+                break
+
+    if not target_path:
         return {"error": f"Node '{node_id}' is not installed. Install it first with install_custom_node."}
 
-    # Queue update
-    result = make_request("/manager/queue/update", method="POST", data=target_node)
-    if "error" in result:
-        return result
+    if not is_git:
+        return {"error": f"'{target_name}' is not a git repository and cannot be updated this way."}
 
-    return {
-        "status": "queued",
-        "node_id": target_node.get("id") or target_node.get("title"),
-        "message": "Update queued. Restart ComfyUI to complete."
-    }
+    # Run git pull
+    try:
+        result = subprocess.run(
+            [git, "pull"],
+            cwd=target_path,
+            capture_output=True,
+            text=True,
+            timeout=120
+        )
+
+        if result.returncode != 0:
+            return {"error": f"git pull failed: {result.stderr}"}
+
+        # Check if there were updates
+        if "Already up to date" in result.stdout:
+            return {
+                "status": "up_to_date",
+                "node_id": target_name,
+                "message": f"'{target_name}' is already up to date."
+            }
+
+        return {
+            "status": "updated",
+            "node_id": target_name,
+            "path": target_path,
+            "message": f"Updated '{target_name}'. Restart ComfyUI to load changes."
+        }
+
+    except subprocess.TimeoutExpired:
+        return {"error": "git pull timed out after 2 minutes"}
 
 
 # ============== MODEL DOWNLOAD ==============
@@ -2003,7 +2177,7 @@ def handle_request(request: dict) -> dict:
                                 },
                                 "status": {
                                     "type": "string",
-                                    "enum": ["all", "installed", "not-installed", "has-update"],
+                                    "enum": ["all", "installed", "not-installed"],
                                     "description": "Filter by installation status. Default: all"
                                 },
                                 "category": {
