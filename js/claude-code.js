@@ -92,7 +92,6 @@ function createFloatingWindow() {
                 </div>
             </div>
             <div class="claude-controls">
-                <button class="claude-btn claude-stop" title="Stop Claude">◼</button>
                 <button class="claude-btn claude-reload" title="Reload Terminal">↻</button>
                 <button class="claude-btn claude-minimize" title="Minimize">−</button>
                 <button class="claude-btn claude-close" title="Close">×</button>
@@ -232,15 +231,6 @@ function createFloatingWindow() {
 
         .claude-reload:hover {
             background: #27ae60;
-            color: #fff;
-        }
-
-        .claude-stop {
-            font-size: 10px;
-        }
-
-        .claude-stop:hover {
-            background: #e74c3c;
             color: #fff;
         }
 
@@ -397,13 +387,6 @@ function createFloatingWindow() {
         // Reload button - fully reloads terminal
         container.querySelector(".claude-reload").addEventListener("click", () => {
             reloadTerminal();
-        });
-
-        // Stop Claude button - sends Ctrl+C
-        container.querySelector(".claude-stop").addEventListener("click", () => {
-            if (websocket && websocket.readyState === WebSocket.OPEN) {
-                websocket.send(JSON.stringify({ type: "input", data: "\x03" }));
-            }
         });
 
         // Minimize button - toggle minimized state
