@@ -50,6 +50,42 @@ def has_claude_conversation(working_dir=None):
     return len(conversation_files) > 0
 
 
+def is_claude_installed():
+    """Check if claude CLI is installed."""
+    import shutil
+    return shutil.which("claude") is not None
+
+
+def install_claude_code():
+    """Attempt to install Claude Code CLI. Returns (success, message)."""
+    import subprocess
+    import shutil
+
+    # Check if npm is available
+    if shutil.which("npm") is None:
+        return False, "npm not found. Please install Node.js first: https://nodejs.org/"
+
+    try:
+        print("[Claude Code] Installing Claude Code CLI...")
+        result = subprocess.run(
+            ["npm", "install", "-g", "@anthropic-ai/claude-code"],
+            capture_output=True,
+            text=True,
+            timeout=120
+        )
+        if result.returncode == 0:
+            print("[Claude Code] Claude Code CLI installed successfully!")
+            return True, "Claude Code CLI installed successfully!"
+        else:
+            error_msg = result.stderr or result.stdout or "Unknown error"
+            print(f"[Claude Code] Installation failed: {error_msg}")
+            return False, f"Installation failed: {error_msg}"
+    except subprocess.TimeoutExpired:
+        return False, "Installation timed out after 120 seconds"
+    except Exception as e:
+        return False, f"Installation error: {str(e)}"
+
+
 def get_claude_command(working_dir=None):
     """Get the appropriate claude command based on whether a conversation exists."""
     if has_claude_conversation(working_dir):
@@ -370,6 +406,25 @@ async def websocket_handler(request):
     if command is None:
         command = get_claude_command()
         print(f"[Claude Code] Auto-detected command: {command}")
+
+    # Check if claude is installed, auto-install if needed
+    if not is_claude_installed():
+        print("[Claude Code] Claude CLI not found, attempting auto-install...")
+        await ws.send_str("o\x1b[33mClaude Code CLI not found. Attempting to install...\x1b[0m\r\n")
+
+        # Run installation in a thread to not block
+        loop = asyncio.get_event_loop()
+        success, message = await loop.run_in_executor(None, install_claude_code)
+
+        if success:
+            await ws.send_str("o\x1b[32m" + message + "\x1b[0m\r\n\r\n")
+        else:
+            await ws.send_str("o\x1b[31m" + message + "\x1b[0m\r\n")
+            await ws.send_str("o\r\nTo install manually, run:\r\n")
+            await ws.send_str("o\x1b[36m  npm install -g @anthropic-ai/claude-code\x1b[0m\r\n")
+            await ws.close()
+            del terminal_sessions[session_id]
+            return ws
 
     async def read_pty():
         """Read from PTY and send to WebSocket."""
