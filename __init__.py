@@ -128,11 +128,23 @@ def install_claude_code():
 
 
 def get_claude_command(working_dir=None):
-    """Get the appropriate claude command based on whether a conversation exists."""
-    if has_claude_conversation(working_dir):
-        return "claude -c"
+    """Get the appropriate claude command based on whether a conversation exists.
+
+    Returns the full path to claude if found via find_executable, otherwise just 'claude'.
+    """
+    # Try to get the full path to claude
+    claude_path = find_executable("claude")
+    if claude_path:
+        if has_claude_conversation(working_dir):
+            return f"{claude_path} -c"
+        else:
+            return claude_path
     else:
-        return "claude"
+        # Fallback - let the shell try to find it
+        if has_claude_conversation(working_dir):
+            return "claude -c"
+        else:
+            return "claude"
 
 
 class WebSocketTerminal:
