@@ -1,0 +1,112 @@
+{
+  "version": "1.0.0",
+  "registry_version": "2025-01-28",
+  "total_skills": 1,
+  "categories": {
+    "generation": 1,
+    "processing": 0,
+    "advanced": 0,
+    "community": 0
+  },
+
+  "core_skills": [
+    {
+      "id": "sdxl-generation",
+      "name": "SDXL Generation Base",
+      "version": "1.0.2",
+      "author": "comfy-pilot",
+      "category": "generation",
+      "path": "skills/core/sdxl-generation/",
+      "description": "Production-ready SDXL pipeline with quality settings and optimization. Perfect starting point for image generation workflows.",
+      "tags": ["sdxl", "generation", "core", "text-to-image", "stable"],
+      "rating": 4.8,
+      "downloads": 5420,
+      "active_users": 1200,
+      "updated": "2025-01-28",
+      "status": "production",
+      "featured": true
+    }
+  ],
+
+  "upcoming_skills": [
+    {
+      "id": "sdxl-turbo",
+      "name": "SDXL Turbo (Fast)",
+      "estimated_release": "2025-02-04",
+      "description": "Ultra-fast 4-step SDXL generation",
+      "category": "generation"
+    },
+    {
+      "id": "sdxl-refined",
+      "name": "SDXL Refined (Quality)",
+      "estimated_release": "2025-02-04",
+      "description": "High-quality SDXL with refiner pipeline",
+      "category": "generation"
+    },
+    {
+      "id": "upscale-4x",
+      "name": "4x Upscale",
+      "estimated_release": "2025-02-11",
+      "description": "Real-ESRGAN 4x upscaling",
+      "category": "processing"
+    },
+    {
+      "id": "controlnet-pose",
+      "name": "ControlNet Pose Control",
+      "estimated_release": "2025-02-18",
+      "description": "Generate images with specific poses using ControlNet",
+      "category": "advanced"
+    },
+    {
+      "id": "batch-generation",
+      "name": "Batch Generation",
+      "estimated_release": "2025-02-25",
+      "description": "Generate multiple images with variations",
+      "category": "advanced"
+    }
+  ],
+
+  "featured_skills": [
+    "sdxl-generation"
+  ],
+
+  "trending_skills": [
+    {
+      "id": "sdxl-generation",
+      "trend_score": 100,
+      "downloads_this_week": 240,
+      "new_users_this_week": 85
+    }
+  ],
+
+  "skill_discovery": {
+    "how_to_find": [
+      "skill list - Show all available skills",
+      "skill search generation - Search skills",
+      "skill info sdxl-generation - Get details",
+      "skill install sdxl-generation - Install"
+    ],
+    "installation": "Automatic - Claude Code discovers skills from this registry"
+  },
+
+  "community": {
+    "total_community_skills": 0,
+    "most_rated": [],
+    "most_downloaded": [],
+    "newest": []
+  },
+
+  "stats": {
+    "total_downloads": 5420,
+    "active_users": 1200,
+    "workflows_created": 8900,
+    "contributors": 1
+  },
+
+  "resources": {
+    "specification": "SKILL_SPEC.md",
+    "documentation": "https://github.com/anthropics/comfy-pilot/wiki/Skills",
+    "contribute": "https://github.com/anthropics/comfy-pilot/blob/main/SKILLS_CONTRIBUTE.md",
+    "discord": "https://discord.gg/comfy-pilot"
+  }
+}
