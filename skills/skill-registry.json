@@ -216,18 +216,28 @@
       "name": "Plurigrid ASI Agent Skills",
       "source": "https://github.com/plurigrid/asi",
       "stars": 150,
-      "total_skills": 365,
+      "total_skills": 370,
       "install": "npx ai-agent-skills install plurigrid/asi",
-      "description": "365+ AI agent skills with GF(3) balanced ternary logic. Categorical structure via ACSet data modeling, Nickel contracts for validation, and triadic skill interleaving.",
-      "categories": ["agent-skills", "categorical", "distributed", "scientific"],
-      "format": "agentskills.io specification",
+      "description": "370+ AI agent skills with GF(3) balanced ternary logic. Includes 5 boxxy interleaving skills derived from DuckLake analysis of 910 babashka calls, showing babashka→boxxy subsumption via native Virtualization.framework access.",
+      "categories": ["agent-skills", "categorical", "distributed", "scientific", "virtualization"],
+      "format": "agentskills.io specification + .joke (boxxy Lisp)",
+      "local_skills": "skills/ecosystems/plurigrid-asi/",
       "highlights": [
+        "shell-bridge - 299 babashka shell calls → native vz/ VM operations",
+        "filesystem-intelligence - 360 fs/slurp/spit calls → EDN-as-code metacircular reading",
+        "container-orchestration - Apple Containers (neo4j, jaeger, isabelle) → vz/ namespace",
+        "metacircular-provider - provider.edn describes the evaluator that reads provider.edn",
+        "belief-revision-vm - Cognitive science tables × DuckDB ACSet × vz/ memory snapshots",
         "GF(3) balanced ternary: +1 generator, 0 coordinator, -1 validator",
         "effective-topos - 62-package Flox dev environment (606 man pages)",
-        "gay-integration - Deterministic coloring for visualization",
-        "acsets - Algebraic databases for relational data modeling",
-        "discopy - String diagrams and categorical quantum mechanics"
-      ]
+        "DuckLake provenance: every skill traces to observed babashka usage patterns"
+      ],
+      "ducklake_provenance": {
+        "total_babashka_calls": 910,
+        "sessions_analyzed": 26,
+        "top_session": "15dcff1d (110 calls, Apple container management)",
+        "query": "SELECT * FROM lake.babashka_usage GROUP BY usage_category ORDER BY count(*) DESC"
+      }
     },
     {
       "id": "sdf-flexibility",
