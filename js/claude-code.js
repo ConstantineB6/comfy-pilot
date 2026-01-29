@@ -553,8 +553,9 @@ function initTerminal(terminalContainer) {
         };
 
         // Shift+Enter: insert a literal newline (for multi-line input in Claude)
+        // Use Ctrl-V (quoted-insert) + Ctrl-J (literal newline) to insert without submitting
         if (event.key === "Enter" && event.shiftKey) {
-            send("\n");
+            send("\x16\x0a"); // Ctrl-V + Ctrl-J (quoted-insert + newline)
             return false;
         }
 
