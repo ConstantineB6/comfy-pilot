@@ -147,8 +147,7 @@ def get_claude_command(working_dir=None):
     Returns the full path to claude if found via find_executable, otherwise just 'claude'.
     """
     # Try to get the full path to claude
-    claude_path = find_executable("claude", verbose=True)
-    print(f"[Claude Code] find_executable('claude') returned: {claude_path}")
+    claude_path = find_executable("claude")
     if claude_path:
         if has_claude_conversation(working_dir):
             return f"{claude_path} -c"
@@ -156,7 +155,6 @@ def get_claude_command(working_dir=None):
             return claude_path
     else:
         # Fallback - let the shell try to find it
-        print("[Claude Code] Warning: claude not found in common paths, falling back to 'claude'")
         if has_claude_conversation(working_dir):
             return "claude -c"
         else:
@@ -476,10 +474,17 @@ async def websocket_handler(request):
         command = get_claude_command()
         print(f"[Claude Code] Auto-detected command: {command}")
 
-    # Note: We don't pre-check for claude here because the Python process
-    # may have a different PATH than the user's shell. The PTY will spawn
-    # with the user's shell environment which should have the correct PATH.
-    # If claude is not found, the user will see the error in the terminal.
+    # If claude is not found (command is just "claude" without path), try to install it
+    if command in ("claude", "claude -c"):
+        print("[Claude Code] Claude CLI not found, attempting auto-install...")
+        success, message = install_claude_code()
+        if success:
+            # Re-detect the command with the newly installed claude
+            command = get_claude_command()
+            print(f"[Claude Code] After install, command: {command}")
+        else:
+            print(f"[Claude Code] Auto-install failed: {message}")
+            # Continue anyway - user will see the error in the terminal
 
     # Try to set up MCP if not already configured (may have been skipped at load time
     # if claude wasn't installed yet)
