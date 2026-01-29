@@ -1412,12 +1412,30 @@ def view_image(node_id: str = None, image_index: int = 0) -> dict:
         return {"error": "Could not get history. Run the workflow first to generate images."}
 
     # Search through history for outputs from this node
+    # Sort by timestamp (most recent first) to get the latest image
     target_node_id = str(target_node["id"])
     image_info = None
 
+    # Build list with timestamps for sorting
+    history_items = []
     for prompt_id, prompt_data in history.items():
         if not isinstance(prompt_data, dict):
             continue
+        status = prompt_data.get("status", {})
+        # Get timestamp from status messages
+        messages = status.get("messages", [])
+        timestamp = 0
+        for msg in messages:
+            if len(msg) >= 2 and isinstance(msg[1], dict):
+                ts = msg[1].get("timestamp", 0)
+                if ts > timestamp:
+                    timestamp = ts
+        history_items.append((prompt_id, prompt_data, timestamp))
+
+    # Sort by timestamp descending (most recent first)
+    history_items.sort(key=lambda x: x[2], reverse=True)
+
+    for prompt_id, prompt_data, _ in history_items:
         outputs = prompt_data.get("outputs", {})
         if target_node_id in outputs:
             node_outputs = outputs[target_node_id]
